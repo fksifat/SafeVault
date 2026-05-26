@@ -8,11 +8,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QProgressBar,
     QMessageBox,
+    QFrame,
+    QHeaderView,
+    QAbstractItemView,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+from app.utils import format_file_size
 
 
 class DashboardWidget(QWidget):
@@ -27,87 +30,116 @@ class DashboardWidget(QWidget):
     def init_ui(self):
         """Initialize UI"""
         layout = QVBoxLayout()
+        layout.setContentsMargins(18, 18, 18, 14)
+        layout.setSpacing(14)
 
         # Title
         title = QLabel("Backup Dashboard")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        title.setObjectName("PageTitle")
         layout.addWidget(title)
 
         # Stats section
         stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(12)
 
         # Active backups
         self.active_label = QLabel("0")
-        active_box = self._create_stat_box("Active Backups", self.active_label)
+        active_box = self._create_stat_box(
+            "Active Jobs", self.active_label, "Jobs configured for local backup"
+        )
         stats_layout.addWidget(active_box)
 
         # Last backup
         self.last_backup_label = QLabel("Never")
-        last_backup_box = self._create_stat_box("Last Backup", self.last_backup_label)
+        last_backup_box = self._create_stat_box(
+            "Last Backup", self.last_backup_label, "Most recent completed run"
+        )
         stats_layout.addWidget(last_backup_box)
 
         # Total backed up
         self.total_label = QLabel("0 GB")
-        total_box = self._create_stat_box("Total Backed Up", self.total_label)
+        total_box = self._create_stat_box(
+            "Total Backed Up", self.total_label, "Total size recorded in history"
+        )
         stats_layout.addWidget(total_box)
 
         layout.addLayout(stats_layout)
 
         # Backup jobs table
+        table_panel = QFrame()
+        table_panel.setObjectName("Panel")
+        table_layout = QVBoxLayout(table_panel)
+        table_layout.setContentsMargins(14, 14, 14, 14)
+        table_layout.setSpacing(10)
+
+        table_header = QHBoxLayout()
         job_label = QLabel("Backup Jobs")
-        job_font = QFont()
-        job_font.setPointSize(12)
-        job_font.setBold(True)
-        job_label.setFont(job_font)
-        layout.addWidget(job_label)
+        job_label.setObjectName("SectionTitle")
+        table_header.addWidget(job_label)
+        table_header.addStretch()
+
+        new_job_btn = QPushButton("New Backup Job")
+        new_job_btn.setObjectName("PrimaryButton")
+        new_job_btn.clicked.connect(self.on_new_job)
+        table_header.addWidget(new_job_btn)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.refresh_jobs)
+        table_header.addWidget(refresh_btn)
+        table_layout.addLayout(table_header)
 
         self.jobs_table = QTableWidget()
         self.jobs_table.setColumnCount(5)
         self.jobs_table.setHorizontalHeaderLabels(
             ["Job Name", "Status", "Last Run", "Next Run", "Actions"]
         )
-        layout.addWidget(self.jobs_table)
+        self.jobs_table.setAlternatingRowColors(True)
+        self.jobs_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.jobs_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.jobs_table.verticalHeader().setVisible(False)
+        self.jobs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.jobs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.jobs_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.jobs_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.jobs_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)
+        self.jobs_table.setColumnWidth(4, 132)
+        table_layout.addWidget(self.jobs_table)
 
-        # Action buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
+        self.empty_label = QLabel("No backup jobs yet. Create one to start protecting a folder.")
+        self.empty_label.setObjectName("MutedText")
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        table_layout.addWidget(self.empty_label)
 
-        new_job_btn = QPushButton("New Backup Job")
-        new_job_btn.clicked.connect(self.on_new_job)
-        btn_layout.addWidget(new_job_btn)
-
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.refresh_jobs)
-        btn_layout.addWidget(refresh_btn)
-
-        layout.addLayout(btn_layout)
+        layout.addWidget(table_panel, 1)
         self.setLayout(layout)
 
         # Refresh on load
         self.refresh_jobs()
 
-    def _create_stat_box(self, label: str, value_widget) -> QWidget:
+    def _create_stat_box(self, label: str, value_widget, caption: str) -> QWidget:
         """Create a stat box widget"""
-        box = QWidget()
+        box = QFrame()
+        box.setObjectName("StatCard")
         box_layout = QVBoxLayout()
+        box_layout.setContentsMargins(16, 14, 16, 14)
+        box_layout.setSpacing(4)
 
         label_widget = QLabel(label)
-        label_widget.setFont(QFont("Arial", 10))
+        label_widget.setObjectName("MutedText")
 
         if isinstance(value_widget, str):
             value_label = QLabel(value_widget)
         else:
             value_label = value_widget
 
-        value_font = QFont("Arial", 14)
-        value_font.setBold(True)
-        value_label.setFont(value_font)
+        value_label.setObjectName("StatValue")
+
+        caption_label = QLabel(caption)
+        caption_label.setObjectName("MutedText")
 
         box_layout.addWidget(label_widget)
         box_layout.addWidget(value_label)
+        box_layout.addWidget(caption_label)
         box.setLayout(box_layout)
 
         return box
@@ -123,6 +155,8 @@ class DashboardWidget(QWidget):
 
             # Get all jobs
             jobs = self.db.get_all_backup_jobs()
+            total_size = 0
+            last_backup = None
 
             # Update stats
             self.active_label.setText(str(len(jobs)))
@@ -140,7 +174,9 @@ class DashboardWidget(QWidget):
                 if history:
                     status = history[0]["status"]
                     last_run = history[0]["backup_time"]
-                    self.last_backup_label.setText(str(last_run)[:10])
+                    if last_backup is None or str(last_run) > str(last_backup):
+                        last_backup = last_run
+                    total_size += sum(h.get("backup_size") or 0 for h in history)
                 else:
                     status = "Never"
                     last_run = "-"
@@ -157,12 +193,20 @@ class DashboardWidget(QWidget):
 
                 # Actions button
                 run_btn = QPushButton("Run Now")
+                run_btn.setObjectName("PrimaryButton")
+                run_btn.setMinimumWidth(96)
                 run_btn.clicked.connect(
                     lambda checked, jid=job["id"], jname=job["name"]: self.run_backup(
                         jid, jname
                     )
                 )
                 self.jobs_table.setCellWidget(row, 4, run_btn)
+                self.jobs_table.setRowHeight(row, 46)
+
+            self.last_backup_label.setText(str(last_backup)[:10] if last_backup else "Never")
+            self.total_label.setText(format_file_size(total_size))
+            self.empty_label.setVisible(len(jobs) == 0)
+            self.jobs_table.setVisible(len(jobs) > 0)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to refresh jobs: {str(e)}")

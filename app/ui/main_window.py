@@ -14,6 +14,7 @@ from app.ui.dashboard import DashboardWidget
 from app.ui.backup_jobs import BackupJobsWidget
 from app.ui.restore import RestoreWidget
 from app.ui.settings import SettingsWidget
+from app.ui.style import get_app_stylesheet
 from app.logs import get_logger
 
 logger = get_logger()
@@ -32,14 +33,20 @@ class MainWindow(QMainWindow):
         self.scheduler = scheduler
 
         self.setWindowTitle("SafeVault - Backup Tool")
-        self.setGeometry(100, 100, 1200, 700)
+        self.setGeometry(100, 100, 1200, 760)
+        self.setMinimumSize(980, 640)
+        theme = self.db.get_setting("theme", "Dark") if self.db else "Dark"
+        self.setStyleSheet(get_app_stylesheet(theme))
 
         # Create central widget
         central_widget = QWidget()
         layout = QVBoxLayout()
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(0)
 
         # Create tabs with manager references
         tabs = QTabWidget()
+        tabs.setDocumentMode(True)
         tabs.addTab(
             DashboardWidget(db_manager=db_manager, backup_manager=backup_manager),
             "Dashboard",
@@ -52,7 +59,7 @@ class MainWindow(QMainWindow):
             RestoreWidget(db_manager=db_manager, restore_manager=restore_manager),
             "Restore",
         )
-        tabs.addTab(SettingsWidget(), "Settings")
+        tabs.addTab(SettingsWidget(db_manager=db_manager), "Settings")
 
         layout.addWidget(tabs)
         central_widget.setLayout(layout)

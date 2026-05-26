@@ -275,3 +275,29 @@ class DatabaseManager:
         if isinstance(metadata, list):
             return [dict(row) for row in metadata]
         return dict(metadata) if metadata else None
+
+    def set_setting(self, key: str, value: str):
+        """Save an application setting."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = datetime('now')
+        """,
+            (key, value),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_setting(self, key: str, default: str = None):
+        """Get an application setting."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["value"] if row else default

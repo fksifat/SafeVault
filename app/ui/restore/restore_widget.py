@@ -13,9 +13,12 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QFileDialog,
     QMessageBox,
+    QFrame,
+    QHeaderView,
+    QAbstractItemView,
+    QSplitter,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
 from app.utils import format_file_size
 
 
@@ -32,42 +35,88 @@ class RestoreWidget(QWidget):
     def init_ui(self):
         """Initialize UI"""
         layout = QVBoxLayout()
+        layout.setContentsMargins(18, 18, 18, 14)
+        layout.setSpacing(14)
 
         # Title
         title = QLabel("Restore Backup")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        title.setObjectName("PageTitle")
         layout.addWidget(title)
 
-        # Backup history tree
-        history_label = QLabel("Backup History:")
-        layout.addWidget(history_label)
+        splitter = QSplitter(Qt.Vertical)
 
+        history_panel = QFrame()
+        history_panel.setObjectName("Panel")
+        history_layout = QVBoxLayout(history_panel)
+        history_layout.setContentsMargins(14, 14, 14, 14)
+        history_layout.setSpacing(10)
+
+        history_header = QHBoxLayout()
+        history_label = QLabel("Backup History")
+        history_label.setObjectName("SectionTitle")
+        history_header.addWidget(history_label)
+        history_header.addStretch()
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.refresh_backups)
+        history_header.addWidget(refresh_btn)
+        history_layout.addLayout(history_header)
+
+        # Backup history tree
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderLabels(["Backup Date", "Job", "Status", "Size"])
+        self.tree_widget.setAlternatingRowColors(True)
+        self.tree_widget.setSelectionMode(QAbstractItemView.SingleSelection)
         self.tree_widget.itemSelectionChanged.connect(self.load_selected_snapshot)
-        layout.addWidget(self.tree_widget)
+        self.tree_widget.header().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.tree_widget.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tree_widget.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.tree_widget.header().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        history_layout.addWidget(self.tree_widget)
+
+        self.history_empty_label = QLabel("No completed backups found yet.")
+        self.history_empty_label.setObjectName("MutedText")
+        self.history_empty_label.setAlignment(Qt.AlignCenter)
+        history_layout.addWidget(self.history_empty_label)
+
+        files_panel = QFrame()
+        files_panel.setObjectName("Panel")
+        files_layout = QVBoxLayout(files_panel)
+        files_layout.setContentsMargins(14, 14, 14, 14)
+        files_layout.setSpacing(10)
+
+        files_header = QHBoxLayout()
+        files_label = QLabel("Files in Selected Backup")
+        files_label.setObjectName("SectionTitle")
+        files_header.addWidget(files_label)
+        files_header.addStretch()
+        files_layout.addLayout(files_header)
 
         # Files in backup
-        files_label = QLabel("Files in Backup:")
-        layout.addWidget(files_label)
-
         self.files_tree = QTreeWidget()
         self.files_tree.setHeaderLabels(["File Name", "Size", "Modified"])
+        self.files_tree.setAlternatingRowColors(True)
         self.files_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
-        layout.addWidget(self.files_tree)
+        self.files_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.files_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.files_tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        files_layout.addWidget(self.files_tree)
+
+        self.files_empty_label = QLabel("Select a backup above to preview its files.")
+        self.files_empty_label.setObjectName("MutedText")
+        self.files_empty_label.setAlignment(Qt.AlignCenter)
+        files_layout.addWidget(self.files_empty_label)
+
+        splitter.addWidget(history_panel)
+        splitter.addWidget(files_panel)
+        splitter.setSizes([260, 260])
+        layout.addWidget(splitter, 1)
 
         # Action buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.refresh_backups)
-        btn_layout.addWidget(refresh_btn)
-
         restore_btn = QPushButton("Restore Selected")
+        restore_btn.setObjectName("PrimaryButton")
         restore_btn.clicked.connect(self.restore_selected)
         btn_layout.addWidget(restore_btn)
 
@@ -95,6 +144,8 @@ class RestoreWidget(QWidget):
         self.current_snapshot = None
 
         if not self.db:
+            self.history_empty_label.setVisible(True)
+            self.tree_widget.setVisible(False)
             return
 
         for job in self.db.get_all_backup_jobs():
@@ -126,8 +177,14 @@ class RestoreWidget(QWidget):
                 )
                 self.tree_widget.addTopLevelItem(item)
 
-        self.tree_widget.resizeColumnToContents(0)
-        self.tree_widget.resizeColumnToContents(1)
+        has_backups = self.tree_widget.topLevelItemCount() > 0
+        self.history_empty_label.setVisible(not has_backups)
+        self.tree_widget.setVisible(has_backups)
+        self.files_empty_label.setText("Select a backup above to preview its files.")
+        self.files_empty_label.setVisible(True)
+        self.files_tree.setVisible(False)
+        if has_backups:
+            self.tree_widget.setCurrentItem(self.tree_widget.topLevelItem(0))
 
     def _discover_snapshot_paths(self, job: dict) -> list:
         """Find snapshot folders for older history rows without stored paths."""
@@ -157,6 +214,9 @@ class RestoreWidget(QWidget):
         self.current_snapshot = None
 
         if not selected:
+            self.files_empty_label.setText("Select a backup above to preview its files.")
+            self.files_empty_label.setVisible(True)
+            self.files_tree.setVisible(False)
             return
 
         snapshot = selected[0].data(0, Qt.UserRole)
@@ -167,6 +227,9 @@ class RestoreWidget(QWidget):
                 "Backup Not Found",
                 "The selected backup folder could not be found on disk.",
             )
+            self.files_empty_label.setText("The selected backup folder could not be found on disk.")
+            self.files_empty_label.setVisible(True)
+            self.files_tree.setVisible(False)
             return
 
         self.current_snapshot = snapshot
@@ -183,7 +246,10 @@ class RestoreWidget(QWidget):
             item.setData(0, Qt.UserRole, file_info)
             self.files_tree.addTopLevelItem(item)
 
-        self.files_tree.resizeColumnToContents(0)
+        has_files = self.files_tree.topLevelItemCount() > 0
+        self.files_empty_label.setText("This backup does not contain any files.")
+        self.files_empty_label.setVisible(not has_files)
+        self.files_tree.setVisible(has_files)
 
     def restore_selected(self):
         """Restore selected files"""
