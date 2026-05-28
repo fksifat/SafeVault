@@ -4,12 +4,15 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QTabWidget,
     QSystemTrayIcon,
     QMenu,
+    QLabel,
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon, QAction, QPixmap, QImage
+from pathlib import Path
 from app.ui.dashboard import DashboardWidget
 from app.ui.backup_jobs import BackupJobsWidget
 from app.ui.restore import RestoreWidget
@@ -18,6 +21,10 @@ from app.ui.style import get_app_stylesheet
 from app.logs import get_logger
 
 logger = get_logger()
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOGO_PNG = PROJECT_ROOT / "logo" / "logo.png"
+LOGO_ICO = PROJECT_ROOT / "logo" / "logo.ico"
 
 
 class MainWindow(QMainWindow):
@@ -35,6 +42,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SafeVault - Backup Tool")
         self.setGeometry(100, 100, 1200, 760)
         self.setMinimumSize(980, 640)
+        self.app_icon = self._load_app_icon()
+        if not self.app_icon.isNull():
+            self.setWindowIcon(self.app_icon)
         theme = self.db.get_setting("theme", "Dark") if self.db else "Dark"
         self.setStyleSheet(get_app_stylesheet(theme))
 
@@ -42,7 +52,10 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(14, 12, 14, 14)
-        layout.setSpacing(0)
+        layout.setSpacing(12)
+
+        header = self.create_header()
+        layout.addLayout(header)
 
         # Create tabs with manager references
         tabs = QTabWidget()
@@ -73,9 +86,78 @@ class MainWindow(QMainWindow):
 
         logger.info("Main window initialized")
 
+    def _load_app_icon(self):
+        """Load the application icon from the logo folder."""
+        if LOGO_ICO.exists():
+            return QIcon(str(LOGO_ICO))
+        if LOGO_PNG.exists():
+            return QIcon(str(LOGO_PNG))
+        return QIcon()
+
+    def create_header(self):
+        """Create the branded application header."""
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(10)
+
+        logo_label = QLabel()
+        logo_label.setObjectName("AppLogo")
+        logo_label.setFixedSize(40, 40)
+        if LOGO_PNG.exists():
+            pixmap = QPixmap(str(LOGO_PNG))
+            pixmap = self._crop_transparent_padding(pixmap)
+            logo_label.setPixmap(
+                pixmap.scaled(
+                    40,
+                    40,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
+        header.addWidget(logo_label)
+
+        title_group = QVBoxLayout()
+        title_group.setContentsMargins(0, 0, 0, 0)
+        title_group.setSpacing(1)
+
+        app_name = QLabel("SafeVault")
+        app_name.setObjectName("AppName")
+        subtitle = QLabel("Storage Backup System")
+        subtitle.setObjectName("MutedText")
+        title_group.addWidget(app_name)
+        title_group.addWidget(subtitle)
+        header.addLayout(title_group)
+        header.addStretch()
+
+        return header
+
+    def _crop_transparent_padding(self, pixmap):
+        """Crop transparent padding so logo assets scale visually."""
+        image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+        bounds = None
+
+        for y in range(image.height()):
+            for x in range(image.width()):
+                if image.pixelColor(x, y).alpha() > 0:
+                    if bounds is None:
+                        bounds = [x, y, x, y]
+                    else:
+                        bounds[0] = min(bounds[0], x)
+                        bounds[1] = min(bounds[1], y)
+                        bounds[2] = max(bounds[2], x)
+                        bounds[3] = max(bounds[3], y)
+
+        if bounds is None:
+            return pixmap
+
+        x1, y1, x2, y2 = bounds
+        return pixmap.copy(x1, y1, x2 - x1 + 1, y2 - y1 + 1)
+
     def create_tray_icon(self):
         """Create system tray icon"""
         self.tray_icon = QSystemTrayIcon(self)
+        if not self.app_icon.isNull():
+            self.tray_icon.setIcon(self.app_icon)
 
         # Create context menu
         tray_menu = QMenu(self)

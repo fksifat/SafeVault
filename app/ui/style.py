@@ -60,6 +60,16 @@ QLabel#PageTitle {
     color: #ffffff;
 }
 
+QLabel#AppName {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+QLabel#AppLogo {
+    background: transparent;
+}
+
 QLabel, QCheckBox {
     background: transparent;
 }
@@ -255,6 +265,16 @@ QLabel#PageTitle {
     font-size: 22px;
     font-weight: 700;
     color: #111827;
+}
+
+QLabel#AppName {
+    font-size: 20px;
+    font-weight: 700;
+    color: #111827;
+}
+
+QLabel#AppLogo {
+    background: transparent;
 }
 
 QLabel#SectionTitle {
