@@ -23,7 +23,15 @@ class BackupScheduler:
         """Start the scheduler"""
         if not self.scheduler.running:
             self.scheduler.start()
+            self.load_scheduled_jobs()
             logger.info("Backup scheduler started")
+
+    def load_scheduled_jobs(self):
+        """Load saved non-manual jobs from the database."""
+        for job in self.db.get_all_backup_jobs():
+            schedule_type = job.get("schedule_type")
+            if schedule_type and schedule_type != "manual":
+                self.schedule_job(job["id"], job["name"], schedule_type)
 
     def stop(self):
         """Stop the scheduler"""
@@ -93,11 +101,11 @@ class BackupScheduler:
             # Perform backup
             if is_incremental:
                 result = self.backup_manager.perform_incremental_backup(
-                    job_id, job["source_path"], job["destination_path"]
+                    job_id, job["source_path"], job["destination_path"], job
                 )
             else:
                 result = self.backup_manager.perform_full_backup(
-                    job_id, job["source_path"], job["destination_path"]
+                    job_id, job["source_path"], job["destination_path"], job
                 )
 
             # Record in database

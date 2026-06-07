@@ -268,7 +268,7 @@ For issues, questions, or suggestions:
 
 ## Author
 
-SafeVault Development Team
+RabitSoft Solution
 
 ---
 

@@ -20,10 +20,13 @@ from PySide6.QtCore import Qt
 class BackupJobsWidget(QWidget):
     """Widget for managing backup jobs"""
 
-    def __init__(self, parent=None, db_manager=None, backup_manager=None):
+    def __init__(
+        self, parent=None, db_manager=None, backup_manager=None, scheduler=None
+    ):
         super().__init__(parent)
         self.db = db_manager
         self.backup_manager = backup_manager
+        self.scheduler = scheduler
         self.init_ui()
 
     def init_ui(self):
@@ -101,6 +104,13 @@ class BackupJobsWidget(QWidget):
         options_layout.addStretch()
         panel_layout.addLayout(options_layout)
 
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setPlaceholderText("Required when encryption is enabled")
+        self.password_input.setEnabled(False)
+        self.encryption_check.toggled.connect(self.password_input.setEnabled)
+        form_layout.addRow("Encryption Password", self.password_input)
+
         # Buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -167,6 +177,15 @@ class BackupJobsWidget(QWidget):
             schedule = self.schedule_combo.currentText().lower()
             compression = self.compression_check.isChecked()
             encryption = self.encryption_check.isChecked()
+            encryption_password = self.password_input.text()
+
+            if encryption and not encryption_password:
+                QMessageBox.warning(
+                    self,
+                    "Validation Error",
+                    "Please enter an encryption password",
+                )
+                return
 
             # Create backup job
             if self.db:
@@ -177,7 +196,10 @@ class BackupJobsWidget(QWidget):
                     schedule_type=schedule,
                     compression_enabled=compression,
                     encryption_enabled=encryption,
+                    encryption_password=encryption_password if encryption else None,
                 )
+                if self.scheduler and schedule != "manual":
+                    self.scheduler.schedule_job(job_id, name, schedule)
                 QMessageBox.information(
                     self,
                     "Success",
@@ -198,3 +220,5 @@ class BackupJobsWidget(QWidget):
         self.schedule_combo.setCurrentIndex(0)
         self.compression_check.setChecked(False)
         self.encryption_check.setChecked(False)
+        self.password_input.clear()
+        self.password_input.setEnabled(False)

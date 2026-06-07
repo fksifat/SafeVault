@@ -5,8 +5,14 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 from app.logs import get_logger
-from app.utils import get_file_hash, format_file_size, ensure_path_exists
+from app.utils import (
+    get_file_hash,
+    format_file_size,
+    ensure_path_exists,
+    get_directory_size,
+)
 from app.database import DatabaseManager
+from app.compression import CompressionManager
 
 logger = get_logger()
 
@@ -107,13 +113,94 @@ class BackupManager:
 
         return files_copied, total_size, errors
 
+    def _get_compression_level(self) -> int:
+        """Read the configured ZIP compression level."""
+        setting = self.db.get_setting("compression_level", "Normal")
+        return {"Fast": 1, "Normal": 6, "Maximum": 9}.get(setting, 6)
+
+    def _finalize_snapshot(self, backup_dest: str, job: dict) -> tuple:
+        """Apply optional compression/encryption and return final path, size, errors."""
+        errors = []
+        final_path = backup_dest
+        compression_enabled = bool(job.get("compression_enabled"))
+        encryption_enabled = bool(job.get("encryption_enabled"))
+
+        logger.debug(
+            f"Finalizing snapshot: dest={backup_dest}, compression={compression_enabled}, encryption={encryption_enabled}, job_id={job.get('id') if job else None}"
+        )
+
+        if not compression_enabled and not encryption_enabled:
+            logger.debug("No compression or encryption requested; skipping finalize step")
+            return final_path, get_directory_size(final_path), errors
+
+        archive_path = f"{backup_dest}.zip"
+        try:
+            compressed = CompressionManager.compress_directory_zip(
+                backup_dest, archive_path, self._get_compression_level()
+            )
+        except Exception as e:
+            logger.error(f"Exception during compression: {e}")
+            compressed = False
+
+        if not compressed:
+            logger.error("Compression step failed or returned False")
+            errors.append("Compression failed")
+            return final_path, get_directory_size(final_path), errors
+
+        logger.info(f"Compression succeeded: {archive_path}")
+        shutil.rmtree(backup_dest)
+        final_path = archive_path
+
+        if encryption_enabled:
+            password = job.get("encryption_password")
+            if not password:
+                errors.append("Encryption is enabled but no password is configured")
+                return final_path, os.path.getsize(final_path), errors
+
+            encrypted_path = f"{archive_path}.encrypted"
+            from app.encryption import EncryptionManager
+
+            if EncryptionManager.encrypt_file(archive_path, password, encrypted_path):
+                os.remove(archive_path)
+                final_path = encrypted_path
+            else:
+                errors.append("Encryption failed")
+
+        return final_path, os.path.getsize(final_path), errors
+
+    def _build_job(self, job_id: int, source_path: str, destination_path: str) -> dict:
+        """Build a plain job dict for legacy direct backup calls."""
+        return {
+            "id": job_id,
+            "source_path": source_path,
+            "destination_path": destination_path,
+            "compression_enabled": False,
+            "encryption_enabled": False,
+            "encryption_password": None,
+        }
+
     def perform_full_backup(
-        self, job_id: int, source_path: str, destination_path: str
+        self,
+        job_id: int,
+        source_path: str,
+        destination_path: str,
+        job_options: dict = None,
     ) -> dict:
         """Perform a full backup"""
         logger.info(f"Starting full backup for job {job_id}")
 
         try:
+            job = job_options or self._build_job(job_id, source_path, destination_path)
+            if job.get("encryption_enabled") and not job.get("encryption_password"):
+                error_message = "Encryption is enabled but no password is configured"
+                logger.error(error_message)
+                return {
+                    "status": "failed",
+                    "error": error_message,
+                    "files_copied": 0,
+                    "total_size": 0,
+                }
+
             # Scan source directory
             files = self.scan_directory(source_path)
             if not files:
@@ -144,16 +231,21 @@ class BackupManager:
                     file_info["size"],
                 )
 
+            final_path, backup_size, finalize_errors = self._finalize_snapshot(
+                backup_dest, job
+            )
+            errors.extend(finalize_errors)
+
             status = "completed" if not errors else "completed_with_errors"
             logger.info(
-                f"Full backup completed: {files_copied} files, {format_file_size(total_size)}"
+                f"Full backup completed: {files_copied} files, {format_file_size(backup_size)}"
             )
 
             return {
                 "status": status,
                 "files_copied": files_copied,
-                "total_size": total_size,
-                "backup_path": backup_dest,
+                "total_size": backup_size,
+                "backup_path": final_path,
                 "errors": errors,
             }
 
@@ -167,12 +259,27 @@ class BackupManager:
             }
 
     def perform_incremental_backup(
-        self, job_id: int, source_path: str, destination_path: str
+        self,
+        job_id: int,
+        source_path: str,
+        destination_path: str,
+        job_options: dict = None,
     ) -> dict:
         """Perform an incremental backup"""
         logger.info(f"Starting incremental backup for job {job_id}")
 
         try:
+            job = job_options or self._build_job(job_id, source_path, destination_path)
+            if job.get("encryption_enabled") and not job.get("encryption_password"):
+                error_message = "Encryption is enabled but no password is configured"
+                logger.error(error_message)
+                return {
+                    "status": "failed",
+                    "error": error_message,
+                    "files_copied": 0,
+                    "total_size": 0,
+                }
+
             # Scan source directory
             files = self.scan_directory(source_path)
             if not files:
@@ -217,16 +324,21 @@ class BackupManager:
                     file_info["size"],
                 )
 
+            final_path, backup_size, finalize_errors = self._finalize_snapshot(
+                backup_dest, job
+            )
+            errors.extend(finalize_errors)
+
             status = "completed" if not errors else "completed_with_errors"
             logger.info(
-                f"Incremental backup completed: {files_copied} files, {format_file_size(total_size)}"
+                f"Incremental backup completed: {files_copied} files, {format_file_size(backup_size)}"
             )
 
             return {
                 "status": status,
                 "files_copied": files_copied,
-                "total_size": total_size,
-                "backup_path": backup_dest,
+                "total_size": backup_size,
+                "backup_path": final_path,
                 "errors": errors,
             }
 

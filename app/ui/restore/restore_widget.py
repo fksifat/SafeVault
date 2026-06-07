@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QFileDialog,
     QMessageBox,
+    QInputDialog,
+    QLineEdit,
     QFrame,
     QHeaderView,
     QAbstractItemView,
@@ -172,6 +174,7 @@ class RestoreWidget(QWidget):
                         "job_id": job["id"],
                         "job_name": job["name"],
                         "backup_path": backup_path,
+                        "encryption_password": job.get("encryption_password"),
                         "history": history,
                     },
                 )
@@ -195,11 +198,12 @@ class RestoreWidget(QWidget):
         paths = []
         for name in os.listdir(job_dir):
             snapshot_path = os.path.join(job_dir, name)
-            if os.path.isdir(snapshot_path):
+            if os.path.isdir(snapshot_path) or name.endswith((".zip", ".zip.encrypted")):
                 paths.append(snapshot_path)
 
         def sort_key(path):
             name = os.path.basename(path)
+            name = name.replace(".zip.encrypted", "").replace(".zip", "")
             try:
                 return datetime.strptime(name, "%Y-%m-%d_%H-%M-%S")
             except ValueError:
@@ -221,7 +225,7 @@ class RestoreWidget(QWidget):
 
         snapshot = selected[0].data(0, Qt.UserRole)
         backup_path = snapshot.get("backup_path") if snapshot else None
-        if not backup_path or not os.path.isdir(backup_path):
+        if not backup_path or not os.path.exists(backup_path):
             QMessageBox.warning(
                 self,
                 "Backup Not Found",
@@ -232,8 +236,39 @@ class RestoreWidget(QWidget):
             self.files_tree.setVisible(False)
             return
 
+        effective_path = backup_path
+        if backup_path.endswith(".encrypted"):
+            password = snapshot.get("encryption_password")
+            if not password:
+                password, ok = QInputDialog.getText(
+                    self,
+                    "Encryption Password",
+                    "Enter the password for this encrypted backup:",
+                    QLineEdit.Password,
+                )
+                if not ok or not password:
+                    self.files_empty_label.setText(
+                        "Password is required to preview this encrypted backup."
+                    )
+                    self.files_empty_label.setVisible(True)
+                    self.files_tree.setVisible(False)
+                    return
+
+            effective_path = self.restore_manager.decrypt_snapshot(backup_path, password)
+            if not effective_path:
+                QMessageBox.warning(
+                    self,
+                    "Decrypt Failed",
+                    "The encrypted backup could not be opened with that password.",
+                )
+                self.files_empty_label.setText("The encrypted backup could not be opened.")
+                self.files_empty_label.setVisible(True)
+                self.files_tree.setVisible(False)
+                return
+
+        snapshot["effective_backup_path"] = effective_path
         self.current_snapshot = snapshot
-        for file_info in self.restore_manager.list_backup_contents(backup_path):
+        for file_info in self.restore_manager.list_backup_contents(effective_path):
             item = QTreeWidgetItem()
             item.setText(0, file_info["path"])
             item.setText(1, format_file_size(file_info["size"]))
@@ -274,9 +309,19 @@ class RestoreWidget(QWidget):
                 for item in selected_files:
                     file_info = item.data(0, Qt.UserRole)
                     target = os.path.join(destination, file_info["path"])
-                    if self.restore_manager.restore_file(
-                        file_info["full_path"], target, overwrite=True
-                    ):
+                    if file_info.get("archive_path"):
+                        restored_ok = self.restore_manager.restore_archive_member(
+                            file_info["archive_path"],
+                            file_info["archive_member"],
+                            target,
+                            overwrite=True,
+                        )
+                    else:
+                        restored_ok = self.restore_manager.restore_file(
+                            file_info["full_path"], target, overwrite=True
+                        )
+
+                    if restored_ok:
                         restored += 1
                     else:
                         failed += 1
@@ -301,8 +346,10 @@ class RestoreWidget(QWidget):
             QMessageBox.warning(self, "No Backup Selected", "Select a backup first.")
             return
 
-        backup_path = self.current_snapshot.get("backup_path")
-        if not backup_path or not os.path.isdir(backup_path):
+        backup_path = self.current_snapshot.get(
+            "effective_backup_path"
+        ) or self.current_snapshot.get("backup_path")
+        if not backup_path or not os.path.exists(backup_path):
             QMessageBox.warning(
                 self,
                 "Backup Not Found",

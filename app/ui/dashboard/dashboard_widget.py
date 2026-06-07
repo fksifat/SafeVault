@@ -12,10 +12,45 @@ from PySide6.QtWidgets import (
     QFrame,
     QHeaderView,
     QAbstractItemView,
+    QInputDialog,
+    QLineEdit,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
 from app.utils import format_file_size
+
+
+class BackupWorker(QThread):
+    """Run a backup without blocking the Qt UI thread."""
+
+    backup_finished = Signal(int, str, dict)
+    backup_failed = Signal(int, str, str)
+
+    def __init__(self, backup_manager, job: dict):
+        super().__init__()
+        self.backup_manager = backup_manager
+        self.job = job
+
+    def run(self):
+        try:
+            history = self.backup_manager.db.get_backup_history(self.job["id"])
+            if history:
+                result = self.backup_manager.perform_incremental_backup(
+                    self.job["id"],
+                    self.job["source_path"],
+                    self.job["destination_path"],
+                    self.job,
+                )
+            else:
+                result = self.backup_manager.perform_full_backup(
+                    self.job["id"],
+                    self.job["source_path"],
+                    self.job["destination_path"],
+                    self.job,
+                )
+            self.backup_finished.emit(self.job["id"], self.job["name"], result)
+        except Exception as e:
+            self.backup_failed.emit(self.job["id"], self.job["name"], str(e))
 
 
 class DashboardWidget(QWidget):
@@ -25,6 +60,7 @@ class DashboardWidget(QWidget):
         super().__init__(parent)
         self.db = db_manager
         self.backup_manager = backup_manager
+        self.backup_workers = {}
         self.init_ui()
 
     def init_ui(self):
@@ -223,33 +259,71 @@ class DashboardWidget(QWidget):
                 QMessageBox.critical(self, "Error", "Job not found")
                 return
 
-            # Perform backup
-            result = self.backup_manager.perform_full_backup(
-                job_id, job["source_path"], job["destination_path"]
-            )
+            if job.get("encryption_enabled") and not job.get("encryption_password"):
+                password, ok = QInputDialog.getText(
+                    self,
+                    "Encryption Password",
+                    f'Enter the encryption password for "{job_name}":',
+                    QLineEdit.Password,
+                )
+                if not ok:
+                    return
+                if not password:
+                    QMessageBox.warning(
+                        self,
+                        "Encryption Password Required",
+                        "This job cannot run encrypted without a password.",
+                    )
+                    return
+                self.db.update_backup_job(job_id, encryption_password=password)
+                job["encryption_password"] = password
 
-            # Record in database
-            self.db.record_backup_history(
-                job_id,
-                result["status"],
-                result.get("files_copied", 0),
-                result.get("total_size", 0),
-                backup_path=result.get("backup_path"),
-                error_message=result.get("error"),
-            )
+            worker = BackupWorker(self.backup_manager, job)
+            worker.backup_finished.connect(self.on_backup_finished)
+            worker.backup_failed.connect(self.on_backup_failed)
+            worker.finished.connect(lambda jid=job_id: self.backup_workers.pop(jid, None))
+            self.backup_workers[job_id] = worker
 
-            QMessageBox.information(
-                self,
-                "Backup Complete",
-                f'Backup "{job_name}" completed successfully!\n\n'
-                f'Files copied: {result.get("files_copied", 0)}\n'
-                f'Size: {result.get("total_size", 0)} bytes',
-            )
-
-            self.refresh_jobs()
+            sender = self.sender()
+            if sender:
+                sender.setEnabled(False)
+                sender.setText("Running...")
+            worker.finished.connect(self.refresh_jobs)
+            worker.start()
 
         except Exception as e:
             QMessageBox.critical(self, "Backup Error", f"Backup failed: {str(e)}")
+
+    def on_backup_finished(self, job_id: int, job_name: str, result: dict):
+        """Record and report a completed worker backup."""
+        errors = result.get("errors") or []
+        error_message = result.get("error") or "\n".join(errors) or None
+        self.db.record_backup_history(
+            job_id,
+            result.get("status", "failed"),
+            result.get("files_copied", 0),
+            result.get("total_size", 0),
+            backup_path=result.get("backup_path"),
+            error_message=error_message,
+        )
+
+        message = (
+            f'Backup "{job_name}" finished.\n\n'
+            f'Files copied: {result.get("files_copied", 0)}\n'
+            f'Size: {format_file_size(result.get("total_size", 0))}'
+        )
+        if errors:
+            message += "\n\n" + "\n".join(errors)
+            QMessageBox.warning(self, "Backup Completed With Errors", message)
+        else:
+            QMessageBox.information(self, "Backup Complete", message)
+
+    def on_backup_failed(self, job_id: int, job_name: str, error: str):
+        """Record and report a worker failure."""
+        self.db.record_backup_history(job_id, "failed", error_message=error)
+        QMessageBox.critical(
+            self, "Backup Error", f'Backup "{job_name}" failed:\n\n{error}'
+        )
 
     def on_new_job(self):
         """Handle new job button click"""

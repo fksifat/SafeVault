@@ -65,7 +65,11 @@ class MainWindow(QMainWindow):
             "Dashboard",
         )
         tabs.addTab(
-            BackupJobsWidget(db_manager=db_manager, backup_manager=backup_manager),
+            BackupJobsWidget(
+                db_manager=db_manager,
+                backup_manager=backup_manager,
+                scheduler=scheduler,
+            ),
             "Backup Jobs",
         )
         tabs.addTab(
