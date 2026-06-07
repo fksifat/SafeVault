@@ -2,6 +2,7 @@
 
 import sqlite3
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +23,8 @@ class DatabaseManager:
 
     def get_connection(self):
         """Get database connection"""
-        conn = sqlite3.connect(self.db_path)
+        # Increase timeout so callers will wait a bit for locks to clear
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -30,6 +32,14 @@ class DatabaseManager:
         """Initialize database tables"""
         conn = self.get_connection()
         cursor = conn.cursor()
+
+        # Use WAL mode to reduce writer/readers blocking and set a busy timeout
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout = 30000")
+        except Exception:
+            # Some SQLite builds or filesystems may not support WAL; ignore failures
+            pass
 
         # Backup Jobs table
         cursor.execute("""
@@ -198,27 +208,41 @@ class DatabaseManager:
         error_message: str = None,
     ):
         """Record backup history"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO backup_history 
-            (job_id, backup_time, status, files_copied, backup_size, duration, backup_path, error_message)
-            VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                job_id,
-                status,
-                files_copied,
-                backup_size,
-                duration,
-                backup_path,
-                error_message,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        # Perform the insert with retry/backoff to handle transient 'database is locked'
+        attempts = 5
+        delay = 0.1
+        for attempt in range(attempts):
+            try:
+                conn = self.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO backup_history 
+                    (job_id, backup_time, status, files_copied, backup_size, duration, backup_path, error_message)
+                    VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        job_id,
+                        status,
+                        files_copied,
+                        backup_size,
+                        duration,
+                        backup_path,
+                        error_message,
+                    ),
+                )
+                conn.commit()
+                conn.close()
+                break
+            except sqlite3.OperationalError as e:
+                # Common transient error: database is locked
+                if "locked" in str(e).lower() and attempt < attempts - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                # Re-raise for non-retryable or exhausted attempts
+                conn.close()
+                raise
 
     def get_backup_history(self, job_id: int):
         """Get backup history for a job"""

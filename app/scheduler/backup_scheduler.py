@@ -93,6 +93,9 @@ class BackupScheduler:
                 return
 
             logger.info(f'Running scheduled backup: {job["name"]}')
+            logger.debug(
+                f"Scheduled job flags: compression={job.get('compression_enabled')}, encryption={job.get('encryption_enabled')}, password_set={'encryption_password' in job and bool(job.get('encryption_password'))}"
+            )
 
             # Determine if full or incremental
             history = self.db.get_backup_history(job_id)
@@ -108,6 +111,13 @@ class BackupScheduler:
                     job_id, job["source_path"], job["destination_path"], job
                 )
 
+            # Record in database (aggregate any errors list)
+            error_message = result.get("error")
+            if not error_message:
+                errors = result.get("errors") or []
+                if isinstance(errors, list) and errors:
+                    error_message = ", ".join(errors)
+
             # Record in database
             self.db.record_backup_history(
                 job_id,
@@ -116,7 +126,7 @@ class BackupScheduler:
                 result.get("total_size", 0),
                 duration=0,
                 backup_path=result.get("backup_path"),
-                error_message=result.get("error"),
+                error_message=error_message,
             )
 
             logger.info(f"Backup completed for job {job_id}: {result}")

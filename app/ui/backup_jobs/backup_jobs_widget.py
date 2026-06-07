@@ -133,6 +133,29 @@ class BackupJobsWidget(QWidget):
         )
         helper_text.setObjectName("MutedText")
         layout.addWidget(helper_text)
+        # Manage existing jobs (delete / refresh)
+        manage_frame = QFrame()
+        manage_frame.setObjectName("Panel")
+        manage_layout = QHBoxLayout(manage_frame)
+        manage_layout.setContentsMargins(8, 8, 8, 8)
+        manage_layout.setSpacing(12)
+
+        self.job_select = QComboBox()
+        self.job_select.setMinimumWidth(320)
+        manage_layout.addWidget(self.job_select)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setObjectName("QuietButton")
+        refresh_btn.clicked.connect(self.load_jobs)
+        manage_layout.addWidget(refresh_btn)
+
+        delete_btn = QPushButton("Delete Job")
+        delete_btn.setObjectName("DangerButton")
+        delete_btn.clicked.connect(self.delete_selected_job)
+        manage_layout.addWidget(delete_btn)
+
+        layout.addWidget(manage_frame)
+        self.load_jobs()
         layout.addStretch()
 
         self.setLayout(layout)
@@ -222,3 +245,61 @@ class BackupJobsWidget(QWidget):
         self.encryption_check.setChecked(False)
         self.password_input.clear()
         self.password_input.setEnabled(False)
+
+    def load_jobs(self):
+        """Load jobs into the job selector"""
+        if not self.db:
+            self.job_select.clear()
+            self.job_select.addItem("Database not initialized")
+            self.job_select.setEnabled(False)
+            return
+
+        try:
+            jobs = self.db.get_all_backup_jobs()
+            self.job_select.clear()
+            for job in jobs:
+                label = f"{job.get('id')} - {job.get('name')}"
+                self.job_select.addItem(label, job.get("id"))
+            self.job_select.setEnabled(len(jobs) > 0)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load jobs: {e}")
+
+    def delete_selected_job(self):
+        """Delete the selected backup job after confirmation"""
+        if not self.db:
+            QMessageBox.critical(self, "Error", "Database manager not initialized")
+            return
+
+        idx = self.job_select.currentIndex()
+        if idx < 0:
+            QMessageBox.information(self, "Info", "No job selected to delete")
+            return
+
+        job_id = self.job_select.itemData(idx)
+        job_label = self.job_select.currentText()
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Delete",
+            f"Are you sure you want to delete backup job '{job_label}'? This will remove the job and its history.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            # Unschedule if scheduler available
+            if self.scheduler:
+                try:
+                    self.scheduler.unschedule_job(job_id)
+                except Exception:
+                    # Non-fatal if unschedule fails
+                    pass
+
+            self.db.delete_backup_job(job_id)
+            QMessageBox.information(
+                self, "Deleted", f"Backup job '{job_label}' deleted"
+            )
+            self.load_jobs()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to delete job: {e}")

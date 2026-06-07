@@ -130,7 +130,9 @@ class BackupManager:
         )
 
         if not compression_enabled and not encryption_enabled:
-            logger.debug("No compression or encryption requested; skipping finalize step")
+            logger.debug(
+                "No compression or encryption requested; skipping finalize step"
+            )
             return final_path, get_directory_size(final_path), errors
 
         archive_path = f"{backup_dest}.zip"
@@ -158,13 +160,28 @@ class BackupManager:
                 return final_path, os.path.getsize(final_path), errors
 
             encrypted_path = f"{archive_path}.encrypted"
-            from app.encryption import EncryptionManager
+            try:
+                # Import may fail if Crypto is not installed; handle gracefully
+                from app.encryption import EncryptionManager
+            except Exception as e:
+                logger.error(f"Encryption module unavailable: {e}")
+                errors.append(f"Encryption unavailable: {e}")
+                return final_path, os.path.getsize(final_path), errors
 
-            if EncryptionManager.encrypt_file(archive_path, password, encrypted_path):
-                os.remove(archive_path)
-                final_path = encrypted_path
-            else:
-                errors.append("Encryption failed")
+            try:
+                if EncryptionManager.encrypt_file(
+                    archive_path, password, encrypted_path
+                ):
+                    try:
+                        os.remove(archive_path)
+                    except Exception:
+                        pass
+                    final_path = encrypted_path
+                else:
+                    errors.append("Encryption failed")
+            except Exception as e:
+                logger.error(f"Encryption failed: {e}")
+                errors.append(f"Encryption failed: {e}")
 
         return final_path, os.path.getsize(final_path), errors
 
